@@ -3,62 +3,64 @@ import { useNavigate } from "react-router-dom";
 import { studentLogin, facultyLogin } from "../api";
 
 function LoginPage() {
-
   const [role, setRole] = useState("student");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
   const navigate = useNavigate();
 
   const handleLogin = async () => {
     try {
-
       if (role === "student") {
-
         const res = await studentLogin({ email, password });
 
-        // 🔥 STORE STUDENT DATA
-        localStorage.setItem("name", res.data.name);
-        localStorage.setItem("regNo", res.data.registerNumber);
+        localStorage.setItem("role", "student");
+        localStorage.setItem("name", res.data.name || "Student");
+        localStorage.setItem("regNo", res.data.regNo || "");
+        localStorage.setItem("className", res.data.className || "AIDS-A");
 
         navigate("/student");
-
       } else {
-
         const res = await facultyLogin({ email, password });
 
-        // (optional)
-        localStorage.setItem("name", res.data.name || "Faculty");
+        localStorage.setItem("role", "faculty");
+        localStorage.setItem("facultyName", res.data.name || "Faculty");
+        localStorage.setItem(
+          "facultySubject",
+          res.data.subject || "Operating Systems"
+        );
+        localStorage.setItem(
+          "facultyClassName",
+          res.data.className || "AIDS-A"
+        );
 
         navigate("/faculty");
       }
-
-    } catch {
-      alert("Invalid login credentials");
+    } catch (err) {
+      console.log("LOGIN ERROR:", err);
+      console.log("LOGIN RESPONSE:", err.response);
+      alert(
+        err.response?.data?.message ||
+          err.response?.data ||
+          "Invalid login credentials"
+      );
     }
   };
 
   return (
     <div style={styles.container}>
       <div style={styles.card}>
-
-        {/* LEFT PANEL */}
         <div style={styles.left}>
           <div style={styles.leftContent}>
             <h1 style={styles.systemTitle}>
-              Attendance <br /> System
+              Smart <br /> Attendance
             </h1>
-
             <p style={styles.systemSubtitle}>
-              Manage attendance easily <br />
-              for students and faculty.
+              Login as student or faculty to continue
             </p>
           </div>
         </div>
 
-        {/* RIGHT PANEL */}
         <div style={styles.right}>
-
           <h2 style={styles.loginTitle}>Login</h2>
 
           <select
@@ -89,9 +91,7 @@ function LoginPage() {
           <button onClick={handleLogin} style={styles.button}>
             Login
           </button>
-
         </div>
-
       </div>
     </div>
   );
@@ -102,28 +102,29 @@ export default LoginPage;
 const styles = {
   container: {
     height: "100vh",
-    background: "#eef2f7",
+    background: "#ffffff",
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
+    fontFamily: "Segoe UI, sans-serif",
   },
 
   card: {
-    width: "750px",
-    height: "420px",
+    width: "780px",
+    height: "430px",
     display: "flex",
-    borderRadius: "14px",
     overflow: "hidden",
+    borderRadius: "18px",
     boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
-    background: "white",
+    background: "#fff",
   },
 
   left: {
     flex: 1,
-    background: "linear-gradient(135deg, #3b6293, #2f4f75)",
+    background: "#050F1E",
     display: "flex",
-    alignItems: "center",
     justifyContent: "center",
+    alignItems: "center",
     padding: "40px",
   },
 
@@ -132,17 +133,18 @@ const styles = {
   },
 
   systemTitle: {
+    margin: 0,
     fontSize: "42px",
-    fontWeight: "700",
     lineHeight: "1.2",
-    marginBottom: "20px",
-    color: "white",
+    color: "#FFFFFF",
+    fontWeight: "700",
   },
 
   systemSubtitle: {
+    marginTop: "18px",
+    color: "#DBEAFF",
     fontSize: "16px",
     lineHeight: "1.6",
-    color: "rgba(255,255,255,0.85)",
   },
 
   right: {
@@ -154,34 +156,34 @@ const styles = {
   },
 
   loginTitle: {
-    fontSize: "28px",
-    fontWeight: "600",
-    marginBottom: "25px",
+    fontSize: "30px",
+    marginBottom: "20px",
+    color: "#050F1E",
   },
 
   select: {
-    padding: "12px",
-    marginBottom: "15px",
+    padding: "13px",
+    marginBottom: "14px",
     borderRadius: "8px",
-    border: "1px solid #ccc",
-    fontSize: "14px",
+    border: "1px solid #CBD5E1",
   },
 
   input: {
     padding: "14px",
-    marginBottom: "15px",
+    marginBottom: "14px",
     borderRadius: "8px",
-    border: "1px solid #ccc",
-    fontSize: "14px",
-    background: "#f5f7fb",
+    border: "1px solid #CBD5E1",
+    outline: "none",
+    fontSize: "15px",
   },
 
   button: {
+    marginTop: "8px",
     padding: "14px",
-    background: "#2f80ed",
-    color: "white",
+    borderRadius: "10px",
     border: "none",
-    borderRadius: "8px",
+    background: "#050F1E",
+    color: "#FFFFFF",
     fontSize: "16px",
     fontWeight: "600",
     cursor: "pointer",

@@ -1,7 +1,5 @@
 package com.example.attendance.controller;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -11,7 +9,15 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import com.example.attendance.model.AttendanceRecord;
+import com.example.attendance.model.Faculty;
+import com.example.attendance.model.Student;
+import com.example.attendance.repository.AttendanceRecordRepository;
+import com.example.attendance.repository.FacultyRepository;
+import com.example.attendance.repository.StudentRepository;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -20,185 +26,301 @@ import jakarta.servlet.http.HttpServletRequest;
 @CrossOrigin(origins = "*")
 public class AuthController {
 
-    // 🔐 GLOBAL STATE
-    private static String currentCode = "0000";
-    private static long codeGeneratedTime = 0;
-    private static String teacherIP = "";
+    private final StudentRepository studentRepository;
+    private final FacultyRepository facultyRepository;
+    private final AttendanceRecordRepository attendanceRecordRepository;
 
-    private static List<Map<String, String>> attendanceList = new ArrayList<>();
+    private static String currentCode = "";
+    private static boolean sessionActive = false;
+    private static String currentSubject = "";
+    private static String currentClassName = "";
 
-    private List<Map<String, String>> students = new ArrayList<>();
+    private static long codeGeneratedTime = 0L;
+    private static final long CODE_EXPIRY_MILLIS = 15000;
 
+    private static String facultyIP = "";
 
-    // 🔹 SAMPLE STUDENTS
-    public AuthController() {
-
-        Map<String, String> s1 = new HashMap<>();
-        s1.put("name", "Student1");
-        s1.put("regNo", "2001");
-        s1.put("email", "student1@college.com");
-        s1.put("password", "1234");
-
-        Map<String, String> s2 = new HashMap<>();
-        s2.put("name", "Student2");
-        s2.put("regNo", "2002");
-        s2.put("email", "student2@college.com");
-        s2.put("password", "1234");
-
-        Map<String, String> s3 = new HashMap<>();
-        s3.put("name", "Student3");
-        s3.put("regNo", "2003");
-        s3.put("email", "student3@college.com");
-        s3.put("password", "1234");
- 
-        students.add(s1);
-        students.add(s2);
-        students.add(s3);
+    public AuthController(StudentRepository studentRepository,
+                          FacultyRepository facultyRepository,
+                          AttendanceRecordRepository attendanceRecordRepository) {
+        this.studentRepository = studentRepository;
+        this.facultyRepository = facultyRepository;
+        this.attendanceRecordRepository = attendanceRecordRepository;
     }
 
-
-    // 🔐 STUDENT LOGIN
     @PostMapping("/student-login")
-    public Map<String, String> studentLogin(@RequestBody Map<String, String> req) {
+    public Student studentLogin(@RequestBody Map<String, String> req) {
+        String email = req.get("email");
+        String password = req.get("password");
 
-        for (Map<String, String> s : students) {
-            if (s.get("email").equals(req.get("email")) &&
-                s.get("password").equals(req.get("password"))) {
-                return s;
-            }
+        if (email == null || password == null || email.isBlank() || password.isBlank()) {
+            throw new RuntimeException("Email and password are required");
         }
 
-        throw new RuntimeException("Invalid login");
+        return studentRepository
+                .findByEmailAndPassword(email, password)
+                .orElseThrow(() -> new RuntimeException("Invalid student login"));
     }
 
-
-    // 🎓 FACULTY LOGIN
     @PostMapping("/faculty-login")
-    public Map<String, String> facultyLogin() {
+    public Faculty facultyLogin(@RequestBody Map<String, String> req) {
+        String email = req.get("email");
+        String password = req.get("password");
 
-        Map<String, String> res = new HashMap<>();
-        res.put("message", "Faculty logged in");
+        if (email == null || password == null || email.isBlank() || password.isBlank()) {
+            throw new RuntimeException("Email and password are required");
+        }
 
-        return res;
+        return facultyRepository
+                .findByEmailAndPassword(email, password)
+                .orElseThrow(() -> new RuntimeException("Invalid faculty login"));
     }
 
+    @PostMapping("/generate-code")
+    public Map<String, String> generateCode(@RequestBody Map<String, String> req,
+                                            HttpServletRequest request) {
 
-    // 🔢 GENERATE CODE
-    @GetMapping("/generate-code")
-    public Map<String, String> generateCode(HttpServletRequest request) {
+        String subject = req.get("subject");
+        String className = req.get("className");
 
-        Random r = new Random();
-        currentCode = String.valueOf(1000 + r.nextInt(9000));
+        System.out.println("GENERATE CODE API CALLED");
+        System.out.println("Subject: " + subject);
+        System.out.println("Class Name: " + className);
 
-        attendanceList.clear();
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("Subject is missing");
+        }
 
+        if (className == null || className.isBlank()) {
+            throw new RuntimeException("Class name is missing");
+        }
+
+        List<Student> students = studentRepository.findByClassName(className);
+
+        System.out.println("Students found: " + students.size());
+
+        if (students.isEmpty()) {
+            throw new RuntimeException("No students found for class: " + className);
+        }
+
+        currentCode = String.valueOf(1000 + new Random().nextInt(9000));
+        sessionActive = true;
+        currentSubject = subject;
+        currentClassName = className;
         codeGeneratedTime = System.currentTimeMillis();
 
-        teacherIP = normalizeIP(request.getRemoteAddr());
+        facultyIP = request.getRemoteAddr();
+
+        System.out.println("=================================");
+        System.out.println("FACULTY NETWORK INFO");
+        System.out.println("Faculty IP: " + facultyIP);
+        System.out.println("=================================");
+
+        List<AttendanceRecord> oldRecords =
+                attendanceRecordRepository.findByClassNameAndSubject(className, subject);
+
+        if (!oldRecords.isEmpty()) {
+            attendanceRecordRepository.deleteAll(oldRecords);
+        }
+
+        for (Student s : students) {
+            s.setTotalClasses(s.getTotalClasses() + 1);
+
+            double percentage = s.getTotalClasses() == 0
+                    ? 0.0
+                    : (s.getPresentCount() * 100.0) / s.getTotalClasses();
+
+            s.setAttendancePercentage(percentage);
+            studentRepository.save(s);
+
+            AttendanceRecord record = new AttendanceRecord();
+            record.setRegNo(s.getRegNo());
+            record.setName(s.getName());
+            record.setClassName(className);
+            record.setSubject(subject);
+            record.setStatus("ABSENT");
+            attendanceRecordRepository.save(record);
+        }
 
         System.out.println("Generated Code: " + currentCode);
-        System.out.println("Teacher IP: " + teacherIP);
+        System.out.println("Code Generated Time: " + codeGeneratedTime);
 
-        Map<String, String> res = new HashMap<>();
-        res.put("code", currentCode);
-
-        return res;
+        return Map.of(
+                "code", currentCode,
+                "message", "Code generated successfully"
+        );
     }
 
-
-    // 🧠 MARK ATTENDANCE
     @PostMapping("/mark-attendance")
     public Map<String, String> markAttendance(@RequestBody Map<String, String> req,
                                               HttpServletRequest request) {
 
-        String inputCode = req.get("code").trim();
-        long currentTime = System.currentTimeMillis();
+        String code = req.get("code");
+        String regNo = req.get("regNo");
+        String subject = req.get("subject");
+        String className = req.get("className");
 
-        String studentIP = normalizeIP(request.getRemoteAddr());
+        String studentIP = request.getRemoteAddr();
 
-        System.out.println("Entered Code: " + inputCode);
-        System.out.println("Current Code: " + currentCode);
+        System.out.println("=================================");
+        System.out.println("STUDENT NETWORK INFO");
         System.out.println("Student IP: " + studentIP);
-        System.out.println("Teacher IP: " + teacherIP);
+        System.out.println("Faculty IP (stored): " + facultyIP);
+        System.out.println("IP MATCH: " + studentIP.equals(facultyIP));
+        System.out.println("=================================");
 
-        // ⏱️ 15 sec expiry
-        if ((currentTime - codeGeneratedTime) > 15000) {
-            currentCode = "0000";
-            throw new RuntimeException("Code expired");
+        System.out.println("MARK ATTENDANCE API CALLED");
+        System.out.println("Entered Code: " + code);
+        System.out.println("Current Code: " + currentCode);
+        System.out.println("Reg No: " + regNo);
+        System.out.println("Subject: " + subject);
+        System.out.println("Class Name: " + className);
+        System.out.println("Session Active: " + sessionActive);
+        System.out.println("Current Subject: " + currentSubject);
+        System.out.println("Current Class Name: " + currentClassName);
+        System.out.println("Code Generated Time: " + codeGeneratedTime);
+        System.out.println("Current Time: " + System.currentTimeMillis());
+
+        if (!sessionActive) {
+            throw new RuntimeException("Attendance session is not active");
         }
 
-        // ❌ invalid code
-        if (!inputCode.equals(currentCode)) {
+        if (code == null || code.isBlank()) {
+            throw new RuntimeException("Code is required");
+        }
+
+        if (regNo == null || regNo.isBlank()) {
+            throw new RuntimeException("Register number is required");
+        }
+
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("Subject is required");
+        }
+
+        if (className == null || className.isBlank()) {
+            throw new RuntimeException("Class name is required");
+        }
+
+        long elapsedTime = System.currentTimeMillis() - codeGeneratedTime;
+        System.out.println("Elapsed Time (ms): " + elapsedTime);
+
+        if (elapsedTime > CODE_EXPIRY_MILLIS) {
+            sessionActive = false;
+            currentCode = "";
+            throw new RuntimeException("Code expired. Attendance must be marked within 15 seconds.");
+        }
+
+        if (!studentIP.equals(facultyIP)) {
+            throw new RuntimeException("You are not on the same network as faculty");
+        }
+
+        if (!code.equals(currentCode)) {
             throw new RuntimeException("Invalid code");
         }
 
-        // 🌐 WiFi check (same network)
-        if (!isSameNetwork(studentIP, teacherIP)) {
-            throw new RuntimeException("Not connected to same WiFi");
+        if (!subject.equals(currentSubject) || !className.equals(currentClassName)) {
+            throw new RuntimeException("Student subject/class mismatch");
         }
 
-        // 🚫 duplicate
-        for (Map<String, String> s : attendanceList) {
-            if (s.get("regNo").equals(req.get("regNo"))) {
-                Map<String, String> res = new HashMap<>();
-                res.put("message", "Already marked");
-                return res;
-            }
+        AttendanceRecord record = attendanceRecordRepository
+                .findByRegNoAndClassNameAndSubject(regNo, className, subject)
+                .orElse(null);
+
+        Student student = studentRepository.findByRegNo(regNo)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
+
+        if (record == null) {
+            record = new AttendanceRecord();
+            record.setRegNo(student.getRegNo());
+            record.setName(student.getName());
+            record.setClassName(className);
+            record.setSubject(subject);
+            record.setStatus("ABSENT");
         }
 
-        // ✅ add attendance
-        Map<String, String> newEntry = new HashMap<>();
-        newEntry.put("name", req.get("name"));
-        newEntry.put("regNo", req.get("regNo"));
+        if (!"PRESENT".equalsIgnoreCase(record.getStatus())) {
+            record.setStatus("PRESENT");
+            attendanceRecordRepository.save(record);
 
-        attendanceList.add(newEntry);
+            student.setPresentCount(student.getPresentCount() + 1);
 
-        Map<String, String> res = new HashMap<>();
-        res.put("message", "Attendance marked");
+            double percentage = student.getTotalClasses() == 0
+                    ? 0.0
+                    : (student.getPresentCount() * 100.0) / student.getTotalClasses();
 
-        return res;
+            student.setAttendancePercentage(percentage);
+            studentRepository.save(student);
+        } else {
+            attendanceRecordRepository.save(record);
+        }
+
+        System.out.println("Attendance saved for " + regNo);
+        System.out.println("Updated Present Count: " + student.getPresentCount());
+        System.out.println("Updated Total Classes: " + student.getTotalClasses());
+        System.out.println("Updated Percentage: " + student.getAttendancePercentage());
+
+        return Map.of("message", "Attendance marked successfully");
     }
 
-
-    // 📋 GET ATTENDANCE
     @GetMapping("/attendance")
-    public List<Map<String, String>> getAttendance() {
-        return attendanceList;
+    public List<AttendanceRecord> getAttendance(@RequestParam String className,
+                                                @RequestParam String subject) {
+        return attendanceRecordRepository.findByClassNameAndSubject(className, subject);
     }
 
+    @GetMapping("/attendance-percentage")
+    public Map<String, Double> getAttendancePercentage(@RequestParam String regNo,
+                                                       @RequestParam String subject) {
 
-    // 🔧 NORMALIZE IP (fix localhost + IPv6)
-    private String normalizeIP(String ip) {
+        Student student = studentRepository.findByRegNo(regNo)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
 
-        if (ip == null) return "0.0.0.0";
-
-        // localhost fix
-        if (ip.equals("127.0.0.1") || ip.equals("0:0:0:0:0:0:0:1")) {
-            return "192.168.1.1"; // fake local network
-        }
-
-        // IPv6 fallback
-        if (ip.contains(":")) {
-            return "192.168.1.1";
-        }
-
-        return ip;
+        return Map.of("percentage", student.getAttendancePercentage());
     }
 
-
-    // 🌐 SAME WIFI CHECK
-    private boolean isSameNetwork(String ip1, String ip2) {
-
-        try {
-            String[] a = ip1.split("\\.");
-            String[] b = ip2.split("\\.");
-
-            return a[0].equals(b[0]) &&
-                   a[1].equals(b[1]) &&
-                   a[2].equals(b[2]);
-
-        } catch (Exception e) {
-            return false;
+    @GetMapping("/remaining-time")
+    public Map<String, Object> getRemainingTime() {
+        if (!sessionActive || codeGeneratedTime == 0L) {
+            return Map.of("active", false, "remainingSeconds", 0);
         }
+
+        long elapsed = System.currentTimeMillis() - codeGeneratedTime;
+        long remaining = CODE_EXPIRY_MILLIS - elapsed;
+
+        if (remaining <= 0) {
+            sessionActive = false;
+            currentCode = "";
+            return Map.of("active", false, "remainingSeconds", 0);
+        }
+
+        return Map.of("active", true, "remainingSeconds", remaining / 1000);
+    }
+
+    @GetMapping("/student-stats")
+    public Map<String, Object> getStudentStats(@RequestParam String regNo) {
+        Student student = studentRepository.findByRegNo(regNo)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
+
+        return Map.of(
+                "name", student.getName(),
+                "regNo", student.getRegNo(),
+                "className", student.getClassName(),
+                "totalClasses", student.getTotalClasses(),
+                "presentCount", student.getPresentCount(),
+                "attendancePercentage", student.getAttendancePercentage(),
+                "parentPhoneNumber", student.getParentPhoneNumber()
+        );
+    }
+
+    @PostMapping("/end-attendance")
+    public Map<String, String> endAttendance() {
+        sessionActive = false;
+        currentCode = "";
+        currentSubject = "";
+        currentClassName = "";
+        codeGeneratedTime = 0L;
+        facultyIP = "";
+
+        return Map.of("message", "Attendance session ended");
     }
 }
